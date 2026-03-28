@@ -16,7 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = '8782789238:AAENc2VrGUNUKQnUbI2SKt79dpJfJKF6UZo'
 VK_TOKEN = 'vk1.a.gg0A2uqhaeJR4Q0rQroAOrKxLtlld-zpDhUuNRsLph2tyJZzoyIioGN8vNs_AzCfepKFqTdigONU-ydz1VZnL68Ns7qZ0HcgUhmEOE_F1ZI26awIwunbGfzTpn-xmEEXAueaaBR5lb-ew_z478YoxYuNlAEHHfGBddR9u10-MJae6l1UUC4C3eKWD28ugFy7hhguP-Ihcxsb42Fbq_SPsw'
-ADMIN_ID = 7572936594
+ADMIN_ID = 7572936594 911874462
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
