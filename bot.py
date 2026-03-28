@@ -16,167 +16,177 @@ from aiogram.fsm.storage.memory import MemoryStorage
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = '8782789238:AAENc2VrGUNUKQnUbI2SKt79dpJfJKF6UZo'
 VK_TOKEN = 'vk1.a.gg0A2uqhaeJR4Q0rQroAOrKxLtlld-zpDhUuNRsLph2tyJZzoyIioGN8vNs_AzCfepKFqTdigONU-ydz1VZnL68Ns7qZ0HcgUhmEOE_F1ZI26awIwunbGfzTpn-xmEEXAueaaBR5lb-ew_z478YoxYuNlAEHHfGBddR9u10-MJae6l1UUC4C3eKWD28ugFy7hhguP-Ihcxsb42Fbq_SPsw'
-ADMIN_ID = 7572936594
+ADMIN_IDS = [7572936594, 911874462]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 session = None 
-
 pending_searches = {}
 
 class States(StatesGroup):
-    fio, phone, ip, vk = State(), State(), State(), State()
+    fio = State()
+    phone = State()
+    ip = State()
+    vk = State()
 
-# --- ЛОГИРОВАНИЕ ---
-async def log_action(db_name, query_tuple):
+# --- БАЗА ДАННЫХ ---
+async def log_to_db(db_name, data):
     async with aiosqlite.connect(db_name) as db:
         if db_name == "history.db":
-            await db.execute("INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)", query_tuple)
+            q = "INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)"
         else:
-            await db.execute("INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)", query_tuple)
+            q = "INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)"
+        await db.execute(q, data)
         await db.commit()
 
-# --- МЕНЮ ---
+# --- КЛАВИАТУРА ---
 def main_kb(user_id):
     btns = [
-        [KeyboardButton(text="👤 ФИО (DEEP SEARCH ⭐️)")],
-        [KeyboardButton(text="👤 VK Profile"), KeyboardButton(text="📞 Пробив Номера")],
-        [KeyboardButton(text="🌐 IP Address"), KeyboardButton(text="👤 Профиль")]
+        [KeyboardButton(text="👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")],
+        [KeyboardButton(text="👤 ВК Профиль"), KeyboardButton(text="📞 Пробив Номера")],
+        [KeyboardButton(text="🌐 IP Адрес"), KeyboardButton(text="👤 Мой Профиль")]
     ]
-    if user_id == ADMIN_ID:
-        btns.append([KeyboardButton(text="📥 Оплаты"), KeyboardButton(text="📥 Логи")])
+    if user_id in ADMIN_IDS:
+        btns.append([KeyboardButton(text="📥 База Оплат"), KeyboardButton(text="📥 Логи Поиска")])
     return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
 
-# --- МОДУЛЬ IP (MAX SCAN) ---
+# --- МОДУЛИ ---
 async def generate_ip_report(ip):
     async with session.get(f"http://ip-api.com/json/{ip}?fields=66846719") as r:
         d = await r.json()
-        if d.get('status') != 'success': return "❌ Ошибка: IP адрес не найден."
-        
-        report = (
-            f"<b>[ 🌐 IP ANALYSIS: {d['query']} ]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"<b>[ 📍 ГЕОЛОКАЦИЯ ]</b>\n"
-            f"├ Страна: {d.get('country')} ({d.get('countryCode')})\n"
-            f"├ Город: {d.get('city')}, {d.get('regionName')}\n"
-            f"├ Индекс: {d.get('zip')}\n"
-            f"└ Карта: <a href='https://www.google.com/maps?q={d.get('lat')},{d.get('lon')}'>ОТКРЫТЬ GOOGLE MAPS</a>\n\n"
-            f"<b>[ 📡 ПРОВАЙДЕР ]</b>\n"
-            f"├ ISP: {d.get('isp')}\n"
-            f"├ Организация: {d.get('org')}\n"
-            f"└ AS: {d.get('as')}\n\n"
-            f"<b>[ 🚨 БЕЗОПАСНОСТЬ ]</b>\n"
-            f"├ VPN/Proxy: {'⚠️ ДА' if d.get('proxy') else '✅ НЕТ'}\n"
-            f"├ Мобильный: {'📱 ДА' if d.get('mobile') else '🏠 НЕТ'}\n"
-            f"└ Хостинг: {'🖥 ДА' if d.get('hosting') else '👤 ЮЗЕР'}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-        )
-        return report
+        if d.get('status') != 'success': return "❌ IP не найден."
+        return (f"<b>[ 🌐 IP: {d['query']} ]</b>\n"
+                f"├ Страна: {d.get('country')}\n"
+                f"├ Город: {d.get('city')}\n"
+                f"├ Провайдер: {d.get('isp')}\n"
+                f"├ VPN/Proxy: {'⚠️ ДА' if d.get('proxy') else '✅ НЕТ'}\n"
+                f"└ Карта: <a href='https://www.google.com/maps?q={d.get('lat')},{d.get('lon')}'>ОТКРЫТЬ КАРТУ</a>")
 
-# --- МОДУЛЬ ВК (MAX SEARCH) ---
 async def generate_vk_report(target):
-    fields = "photo_max,city,country,bdate,status,online,last_seen,followers_count,career,education,relation,domain"
+    fields = "photo_max,city,bdate,status,online,followers_count,career,education,relation,domain"
     url = f"https://api.vk.com/method/users.get?user_ids={target}&fields={fields}&access_token={VK_TOKEN}&v=5.131"
     async with session.get(url) as r:
         data = await r.json()
         if 'response' not in data or not data['response']: return "❌ Профиль не найден."
         u = data['response'][0]
-        
         rel_map = {1: "Свободен(а)", 2: "Есть друг/подруга", 3: "Помолвлен(а)", 4: "В браке", 5: "Всё сложно", 6: "В активном поиске", 7: "Влюблен(а)", 8: "В гражданском браке"}
-        
-        report = (
-            f"<b>[ 👤 ВК ДОСЬЕ: {u.get('first_name')} {u.get('last_name')} ]</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"├ ID: <code>{u.get('id')}</code>\n"
-            f"├ Ник: <code>{u.get('domain', '---')}</code>\n"
-            f"├ ДР: <code>{u.get('bdate', 'Скрыто')}</code>\n"
-            f"├ Город: {u.get('city', {}).get('title', 'Не указан')}\n"
-            f"├ Статус: <i>{u.get('status', '---')}</i>\n"
-            f"├ Сем. положение: {rel_map.get(u.get('relation', 0), 'Скрыто')}\n"
-            f"├ ВУЗ: {u.get('university_name', 'Скрыто')}\n"
-            f"├ Подписчиков: {u.get('followers_count', 0)}\n"
-            f"├ Активность: {'🟢 ONLINE' if u.get('online') else '🔴 OFFLINE'}\n"
-            f"└ Ссылка: vk.com/{u.get('domain', 'id'+str(u.get('id')))}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-        )
-        return report
+        return (f"<b>[ 👤 ВК: {u.get('first_name')} {u.get('last_name')} ]</b>\n"
+                f"├ ID: <code>{u.get('id')}</code>\n"
+                f"├ Город: {u.get('city', {}).get('title', 'Не указан')}\n"
+                f"├ ДР: <code>{u.get('bdate', 'Скрыто')}</code>\n"
+                f"├ Сем. положение: {rel_map.get(u.get('relation', 0), 'Скрыто')}\n"
+                f"├ Статус: <i>{u.get('status', '')}</i>\n"
+                f"├ Активность: {'🟢 В сети' if u.get('online') else '🔴 Оффлайн'}\n"
+                f"└ Ссылка: vk.com/{u.get('domain', 'id'+str(u.get('id')))}")
 
-# --- МОДУЛЬ НОМЕРА ---
-async def generate_phone_report(phone):
-    clean = "".join(filter(str.isdigit, phone))
-    if clean.startswith("8"): clean = "7" + clean[1:]
-    return (f"<b>[ 📂 НОМЕР: +{clean} ]</b>\n"
-            f"├ <a href='https://numbuster.com/ru/phone/{clean}'>Теги (NumBuster)</a>\n"
-            f"├ <a href='https://www.truecaller.com/search/ru/{clean}'>Имена (TrueCaller)</a>\n"
-            f"└ <a href='https://www.google.com/search?q=site:avito.ru+%22{clean}%22'>Объявления Avito</a>")
+async def get_fio_report(fio):
+    enc = urllib.parse.quote(fio)
+    vk_url = f"https://api.vk.com/method/users.search?q={enc}&count=1&fields=bdate,city,domain&access_token={VK_TOKEN}&v=5.131"
+    async with session.get(vk_url) as r:
+        v = await r.json()
+        u = v['response']['items'][0] if 'response' in v and v['response']['items'] else {}
+        return (f"<b>[ 📂 ДОСЬЕ: {fio.upper()} ]</b>\n"
+                f"├ ВК: <code>{u.get('bdate','-')}</code>, {u.get('city',{}).get('title','-')}\n"
+                f"├ Ссылка: vk.com/{u.get('domain','id')}\n"
+                f"└ <a href='https://fssp.gov.ru/iss/ip?is%5Blast_name%5D={fio.split()[0]}'>ФССП (Долги)</a>")
 
 # --- ОБРАБОТЧИКИ ---
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
-    await m.answer("<b>SYSTEM START...</b>\nМодули OSINT (VK/IP/Phone/FIO) готовы.\n\nПодпишись: @owhig 👤", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
+    await m.answer("<b>СИСТЕМА OSINT ЗАПУЩЕНА</b>", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
 
-@dp.message(F.text == "🌐 IP Address")
-async def s_ip(m: Message, state: FSMContext):
-    await m.answer("🌐 <b>Введите IP адрес для анализа:</b>", parse_mode="HTML")
-    await state.set_state(States.ip)
+@dp.message(F.text == "👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")
+async def s_f(m: Message, state: FSMContext):
+    await m.answer("📝 Введите ФИО цели:")
+    await state.set_state(States.fio)
 
-@dp.message(States.ip)
-async def p_ip(m: Message, state: FSMContext):
-    await log_action("history.db", (m.from_user.id, "IP", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    await m.answer(await generate_ip_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+@dp.message(States.fio)
+async def p_f(m: Message, state: FSMContext):
+    fio = m.text
+    if m.from_user.id in ADMIN_IDS:
+        await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        pending_searches[m.from_user.id] = fio
+        await m.answer_invoice(title="ПОИСК ПО ФИО", description=fio, prices=[LabeledPrice(label="Звезды", amount=15)], payload="pay", currency="XTR")
     await state.clear()
 
-@dp.message(F.text == "👤 VK Profile")
-async def s_vk(m: Message, state: FSMContext):
-    await m.answer("👤 <b>Введите ID или короткое имя ВК:</b>", parse_mode="HTML")
-    await state.set_state(States.vk)
+@dp.pre_checkout_query()
+async def pre_c(q: PreCheckoutQuery): await q.answer(ok=True)
 
-@dp.message(States.vk)
-async def p_vk(m: Message, state: FSMContext):
-    await log_action("history.db", (m.from_user.id, "VK", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    await m.answer(await generate_vk_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
-    await state.clear()
+@dp.message(F.successful_payment)
+async def pay_ok(m: Message):
+    fio = pending_searches.get(m.from_user.id, "Ошибка")
+    await log_to_db("plat.db", (m.from_user.id, m.from_user.username, fio, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
 
 @dp.message(F.text == "📞 Пробив Номера")
 async def s_p(m: Message, state: FSMContext):
-    await m.answer("📞 <b>Введите номер телефона:</b>", parse_mode="HTML")
+    await m.answer("📞 Введите номер (+7...):")
     await state.set_state(States.phone)
 
 @dp.message(States.phone)
 async def p_p(m: Message, state: FSMContext):
-    await log_action("history.db", (m.from_user.id, "PHONE", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    await m.answer(await generate_phone_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+    clean = "".join(filter(str.isdigit, m.text))
+    await log_to_db("history.db", (m.from_user.id, "PHONE", clean, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    report = (f"<b>[ 📱 НОМЕР: +{clean} ]</b>\n"
+              f"├ <a href='https://numbuster.com/ru/phone/{clean}'>Теги (NumBuster)</a>\n"
+              f"└ <a href='https://mnp.ros-reestr.ru/search?phone={clean}'>Проверка MNP</a>")
+    await m.answer(report, parse_mode="HTML", disable_web_page_preview=True)
     await state.clear()
 
-@dp.message(F.text == "📥 Оплаты")
+@dp.message(F.text == "🌐 IP Адрес")
+async def s_ip(m: Message, state: FSMContext):
+    await m.answer("🌐 Введите IP адрес:")
+    await state.set_state(States.ip)
+
+@dp.message(States.ip)
+async def p_ip(m: Message, state: FSMContext):
+    await log_to_db("history.db", (m.from_user.id, "IP", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer(await generate_ip_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+    await state.clear()
+
+@dp.message(F.text == "👤 ВК Профиль")
+async def s_vk(m: Message, state: FSMContext):
+    await m.answer("👤 Введите ID или короткое имя ВК:")
+    await state.set_state(States.vk)
+
+@dp.message(States.vk)
+async def p_vk(m: Message, state: FSMContext):
+    await log_to_db("history.db", (m.from_user.id, "VK", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer(await generate_vk_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+    await state.clear()
+
+@dp.message(F.text == "📥 База Оплат")
 async def d_p(m: Message):
-    if m.from_user.id == ADMIN_ID: await m.answer_document(FSInputFile("plat.db"))
+    if m.from_user.id in ADMIN_IDS and os.path.exists("plat.db"):
+        await m.answer_document(FSInputFile("plat.db"))
 
-@dp.message(F.text == "📥 Логи")
+@dp.message(F.text == "📥 Логи Поиска")
 async def d_l(m: Message):
-    if m.from_user.id == ADMIN_ID: await m.answer_document(FSInputFile("history.db"))
+    if m.from_user.id in ADMIN_IDS and os.path.exists("history.db"):
+        await m.answer_document(FSInputFile("history.db"))
 
-@dp.message(F.text == "👤 Профиль")
+@dp.message(F.text == "👤 Мой Профиль")
 async def prof(m: Message):
-    status = "Admin" if m.from_user.id == ADMIN_ID else "User"
-    await m.answer(f"👤 <b>Ваш ID:</b> <code>{m.from_user.id}</code>\n<b>Статус:</b> {status}", parse_mode="HTML")
+    status = "👑 Админ" if m.from_user.id in ADMIN_IDS else "👤 Юзер"
+    await m.answer(f"🆔 ID: <code>{m.from_user.id}</code>\n📊 Статус: {status}", parse_mode="HTML")
 
-# --- СЕРВЕР И АНТИ-СОН ---
-async def handle(r): return web.Response(text="SHERLOCK ACTIVE")
+# --- СЕРВЕР И ПИНГ ---
+async def handle(r): return web.Response(text="ACTIVE")
 async def self_ping():
     url = os.environ.get("RENDER_EXTERNAL_URL")
-    while url:
-        try: async with session.get(url) as r: pass
-        except: pass
+    while True:
+        if url:
+            try:
+                async with session.get(url) as r: pass
+            except: pass
         await asyncio.sleep(300)
 
 async def main():
     async with aiosqlite.connect("history.db") as db:
         await db.execute("CREATE TABLE IF NOT EXISTS search_logs (id INTEGER PRIMARY KEY, user_id INTEGER, type TEXT, query TEXT, date TEXT)")
-        await db.commit()
     async with aiosqlite.connect("plat.db") as db:
         await db.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY, user_id INTEGER, username TEXT, fio TEXT, date TEXT)")
-        await db.commit()
     
     global session
     session = aiohttp.ClientSession()
@@ -184,7 +194,12 @@ async def main():
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    await asyncio.gather(web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080))).start(), dp.start_polling(bot), self_ping())
+    
+    await asyncio.gather(
+        web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080))).start(),
+        dp.start_polling(bot),
+        self_ping()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
