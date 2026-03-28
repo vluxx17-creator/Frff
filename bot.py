@@ -25,182 +25,164 @@ session = None
 pending_searches = {}
 
 class States(StatesGroup):
-    fio = State()
-    phone = State()
-    ip = State()
-    email = State()
-    ton = State()
-    vk = State()
+    fio, phone, email, vk, ip, ton = State(), State(), State(), State(), State(), State()
 
-# --- БАЗЫ ДАННЫХ ---
-async def log_search(user_id, stype, query):
-    async with aiosqlite.connect("history.db") as db:
-        await db.execute("INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)",
-                         (user_id, stype, query, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+# --- ЛОГИРОВАНИЕ ---
+async def log_to_db(db_name, data):
+    async with aiosqlite.connect(db_name) as db:
+        query = "INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)" if db_name == "history.db" else "INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)"
+        await db.execute(query, data)
         await db.commit()
 
-async def log_payment(user_id, username, fio):
-    async with aiosqlite.connect("plat.db") as db:
-        await db.execute("INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)",
-                         (user_id, username, fio, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        await db.commit()
-
-# --- КЛАВИАТУРА ---
+# --- МЕНЮ ---
 def main_kb(user_id):
     btns = [
-        [KeyboardButton(text="👤 ФИО (15 ⭐️)")],
-        [KeyboardButton(text="📧 Email"), KeyboardButton(text="📞 Номер")],
-        [KeyboardButton(text="🌐 IP"), KeyboardButton(text="👤 ВК")],
-        [KeyboardButton(text="💎 TON"), KeyboardButton(text="👤 Профиль")]
+        [KeyboardButton(text="👤 ФИО (DEEP SCAN ⭐️)")],
+        [KeyboardButton(text="👤 ВК Профиль"), KeyboardButton(text="📞 HLR / Номер")],
+        [KeyboardButton(text="🌐 IP Address"), KeyboardButton(text="📧 Email OSINT")],
+        [KeyboardButton(text="💎 TON Wallet"), KeyboardButton(text="👤 Профиль")]
     ]
-    if user_id == ADMIN_ID:
-        btns.append([KeyboardButton(text="📥 База оплат"), KeyboardButton(text="📥 Логи поиска")])
+    if user_id == ADMIN_ID: btns.append([KeyboardButton(text="📥 Оплаты"), KeyboardButton(text="📥 Логи")])
     return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
 
-# --- DEEP OSINT LOGIC ---
-async def get_fio_report(fio):
-    enc = urllib.parse.quote(fio)
-    vk_url = f"https://api.vk.com/method/users.search?q={enc}&count=1&fields=bdate,city,country,site,domain,home_phone&access_token={VK_TOKEN}&v=5.131"
-    
-    # OSINT Links
-    ok = f"https://ok.ru/search?st.query={enc}"
-    fb = f"https://www.facebook.com/public/{enc.replace(' ', '-')}"
-    inst = f"https://www.google.com/search?q=site:instagram.com+%22{enc}%22"
-    linked = f"https://www.google.com/search?q=site:linkedin.com/in+%22{enc}%22"
-    
-    # Government/Court/FSSP Dorks
-    gos = f"https://www.google.com/search?q=site:fssp.gov.ru+OR+site:nalog.gov.ru+OR+site:sudrf.ru+%22{enc}%22"
-
-    async with session.get(vk_url) as r:
+# --- МОДУЛЬ ВК (MAX SEARCH) ---
+async def generate_vk_report(target):
+    fields = "photo_max,city,country,bdate,status,online,last_seen,followers_count,common_count,counters,career,military,education,relation,personal,contacts,site"
+    url = f"https://api.vk.com/method/users.get?user_ids={target}&fields={fields}&access_token={VK_TOKEN}&v=5.131"
+    async with session.get(url) as r:
         data = await r.json()
-        u = data['response']['items'][0] if 'response' in data and data['response']['items'] else {}
+        if 'response' not in data or not data['response']: return "❌ Профиль не найден."
+        u = data['response'][0]
         
-        return (
-            f"🔍 <b>МАКСИМАЛЬНЫЙ ОТЧЕТ: {fio}</b>\n"
+        # Обработка данных
+        rel_map = {1: "Свободен(а)", 2: "Есть друг/подруга", 3: "Помолвлен(а)", 4: "В браке", 5: "Всё сложно", 6: "В активном поиске", 7: "Влюблен(а)", 8: "В гражданском браке"}
+        edu = f"{u.get('university_name', '')} ({u.get('faculty_name', '')})" if u.get('university_name') else "Скрыто"
+        
+        report = (
+            f"<b>[ 👤 ВК ДОСЬЕ: {u.get('first_name')} {u.get('last_name')} ]</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 <b>ДАННЫЕ ИЗ ВК:</b>\n"
-            f"├ ДР: {u.get('bdate', 'Скрыто')}\n"
-            f"├ Город: {u.get('city', {}).get('title', 'Не указан')}\n"
-            f"├ Контакт: <code>{u.get('site', 'Скрыто')}</code>\n"
-            f"└ Ссылка: vk.com/{u.get('domain', 'id'+str(u.get('id','')))}\n\n"
-            f"📱 <b>СОЦСЕТИ (OSINT):</b>\n"
-            f"├ <a href='{ok}'>Одноклассники</a> | <a href='{fb}'>Facebook</a>\n"
-            f"└ <a href='{inst}'>Instagram</a> | <a href='{linked}'>LinkedIn</a>\n\n"
-            f"🏛 <b>ГОСРЕЕСТРЫ РФ (ФССП/СУДЫ/ИНН):</b>\n"
-            f"└ <a href='{gos}'>ПОИСК ДОЛГОВ И ДЕЛ</a>\n"
+            f"<b>[ 🆔 ИДЕНТИФИКАЦИЯ ]</b>\n"
+            f"├ ID: <code>{u.get('id')}</code>\n"
+            f"├ Ник: <code>{u.get('domain', '---')}</code>\n"
+            f"├ Ссылка: vk.com/{u.get('domain', 'id'+str(u.get('id')))}\n\n"
+            f"<b>[ 👤 ЛИЧНЫЕ ДАННЫЕ ]</b>\n"
+            f"├ ДР: <code>{u.get('bdate', 'Скрыто')}</code>\n"
+            f"├ Статус: <i>{u.get('status', '---')}</i>\n"
+            f"├ Семейное положение: {rel_map.get(u.get('relation', 0), 'Скрыто')}\n"
+            f"├ Город: {u.get('city', {}).get('title', 'Не указан')}\n\n"
+            f"<b>[ 🎓 КАРЬЕРА И УЧЕБА ]</b>\n"
+            f"├ ВУЗ: {edu}\n"
+            f"└ Карьера: {u.get('career', [{}])[0].get('company', 'Скрыто') if u.get('career') else 'Нет данных'}\n\n"
+            f"<b>[ 📊 СТАТИСТИКА ]</b>\n"
+            f"├ Подписчиков: {u.get('followers_count', 0)}\n"
+            f"├ Активность: {'🟢 ONLINE' if u.get('online') else '🔴 OFFLINE'}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 <i>Лучше чем Шерлок | @searchHams_bot</i>"
         )
+        return report, u.get('photo_max')
+
+# --- МОДУЛЬ IP (MAX SEARCH) ---
+async def generate_ip_report(ip):
+    async with session.get(f"http://ip-api.com/json/{ip}?fields=66846719") as r:
+        d = await r.json()
+        if d.get('status') != 'success': return "❌ Ошибка: IP не существует."
+        
+        report = (
+            f"<b>[ 🌐 IP ANALYSIS: {d['query']} ]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>[ 📍 ГЕОЛОКАЦИЯ ]</b>\n"
+            f"├ Страна: {d.get('country')} ({d.get('countryCode')})\n"
+            f"├ Город: {d.get('city')}, {d.get('regionName')}\n"
+            f"├ Индекс: {d.get('zip')}\n"
+            f"└ Карта: <a href='https://www.google.com/maps?q={d.get('lat')},{d.get('lon')}'>ОТКРЫТЬ GOOGLE MAPS</a>\n\n"
+            f"<b>[ 📡 ПРОВАЙДЕР ]</b>\n"
+            f"├ ISP: {d.get('isp')}\n"
+            f"├ Организация: {d.get('org')}\n"
+            f"└ AS: {d.get('as')}\n\n"
+            f"<b>[ 🚨 БЕЗОПАСНОСТЬ ]</b>\n"
+            f"├ VPN/Proxy: {'⚠️ ДА' if d.get('proxy') else '✅ НЕТ'}\n"
+            f"├ Мобильный: {'📱 ДА' if d.get('mobile') else '🏠 НЕТ'}\n"
+            f"└ Хостинг: {'🖥 ДА' if d.get('hosting') else '👤 ЮЗЕР'}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+        )
+        return report
+
+# --- МОДУЛЬ TON (MAX SEARCH) ---
+async def generate_ton_report(addr):
+    async with session.get(f"https://tonapi.io/v2/accounts/{addr}") as r:
+        if r.status != 200: return "❌ Ошибка доступа к блокчейну."
+        d = await r.json()
+        balance = d.get('balance', 0) / 10**9
+        report = (
+            f"<b>[ 💎 TON WALLET AUDIT ]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"├ Адрес: <code>{addr[:8]}...{addr[-8:]}</code>\n"
+            f"├ Баланс: <b>{balance:.4f} TON</b>\n"
+            f"├ Статус: {d.get('status', 'Unknown')}\n"
+            f"├ Версия: {d.get('interfaces', ['Unknown'])[0]}\n"
+            f"└ DNS домены: {', '.join(d.get('dns_names', ['Нет']))}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <a href='https://tonviewer.com/{addr}'>Смотреть транзакции в TonViewer</a>"
+        )
+        return report
 
 # --- ОБРАБОТЧИКИ ---
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
-    await m.answer("Приветствую в @searchHams_bot\nТут есть поиск абсолютно по всему.\n\nПодпишись на @owhig 👤", reply_markup=main_kb(m.from_user.id))
+    await m.answer("<b>SYSTEM START...</b>\nМодули OSINT ULTIMATE загружены.\n\nПодпишись: @owhig 👤", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
 
-@dp.message(F.text == "📥 База оплат")
-async def db_p(m: Message):
-    if m.from_user.id == ADMIN_ID and os.path.exists("plat.db"):
-        await m.answer_document(FSInputFile("plat.db"))
-
-@dp.message(F.text == "📥 Логи поиска")
-async def db_h(m: Message):
-    if m.from_user.id == ADMIN_ID and os.path.exists("history.db"):
-        await m.answer_document(FSInputFile("history.db"))
-
-@dp.message(F.text == "👤 ФИО (15 ⭐️)")
-async def s_fio(m: Message, state: FSMContext):
-    await m.answer("👤 <b>Введите ФИО для пробива:</b>", parse_mode="HTML")
-    await state.set_state(States.fio)
-
-@dp.message(States.fio)
-async def p_fio(m: Message, state: FSMContext):
-    fio = m.text
-    if m.from_user.id == ADMIN_ID:
-        await log_payment(m.from_user.id, m.from_user.username, fio)
-        await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
-    else:
-        pending_searches[m.from_user.id] = fio
-        await m.answer_invoice(title="Deep Search ФИО", description=f"Запрос: {fio}", prices=[LabeledPrice(label="15 Stars", amount=15)], payload=f"f_{m.from_user.id}", currency="XTR", start_parameter="fio")
-    await state.clear()
-
-@dp.pre_checkout_query()
-async def pre_c(q: PreCheckoutQuery): await q.answer(ok=True)
-
-@dp.message(F.content_type == ContentType.SUCCESSFUL_PAYMENT)
-async def success_p(m: Message):
-    fio = pending_searches.get(m.from_user.id, "Неизвестно")
-    await log_payment(m.from_user.id, m.from_user.username, fio)
-    await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
-
-@dp.message(F.text == "📧 Email")
-async def s_e(m: Message, state: FSMContext):
-    await m.answer("📧 Введите Email:")
-    await state.set_state(States.email)
-
-@dp.message(States.email)
-async def p_e(m: Message, state: FSMContext):
-    await log_search(m.from_user.id, "EMAIL", m.text)
-    report = (
-        f"🔍 <b>OSINT ПО EMAIL: {m.text}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔗 <b>ГДЕ ЗАРЕГИСТРИРОВАН:</b>\n"
-        f"└ <a href='https://epieos.com/?q={m.text}'>Проверить аккаунты (Epieos)</a>\n"
-        f"└ <a href='https://intelx.io/?s={m.text}'>Поиск в утечках (IntelX)</a>\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
-    )
-    await m.answer(report, parse_mode="HTML", disable_web_page_preview=True)
-    await state.clear()
-
-@dp.message(F.text == "📞 Номер")
-async def s_p(m: Message, state: FSMContext):
-    await m.answer("📞 Введите номер (+7...):")
-    await state.set_state(States.phone)
-
-@dp.message(States.phone)
-async def p_p(m: Message, state: FSMContext):
-    await log_search(m.from_user.id, "PHONE", m.text)
-    try:
-        parsed = phonenumbers.parse(m.text)
-        await m.answer(f"📞 <b>ИНФО:</b> {m.text}\n└ Код страны: {parsed.country_code}", parse_mode="HTML")
-    except: await m.answer("❌ Ошибка формата")
-    await state.clear()
-
-@dp.message(F.text == "🌐 IP")
-async def s_ip(m: Message, state: FSMContext):
-    await m.answer("🌐 Введите IP:")
-    await state.set_state(States.ip)
-
-@dp.message(States.ip)
-async def p_ip(m: Message, state: FSMContext):
-    await log_search(m.from_user.id, "IP", m.text)
-    async with session.get(f"http://ip-api.com/json/{m.text}") as r:
-        d = await r.json()
-        if d.get('status') == 'success':
-            await m.answer(f"🌐 <b>IP:</b> {m.text}\n├ Страна: {d['country']}\n└ Провайдер: {d['isp']}", parse_mode="HTML")
-    await state.clear()
-
-@dp.message(F.text == "👤 ВК")
-async def s_vk(m: Message, state: FSMContext):
-    await m.answer("👤 Введите ссылку или ID ВК:")
+@dp.message(F.text == "👤 ВК Профиль")
+async def s_v(m: Message, state: FSMContext):
+    await m.answer("👤 <b>Введите ID или Ссылку ВК:</b>", parse_mode="HTML")
     await state.set_state(States.vk)
 
 @dp.message(States.vk)
-async def p_vk(m: Message, state: FSMContext):
-    await log_search(m.from_user.id, "VK", m.text)
-    await m.answer(f"🔎 Информация по ВК профилю {m.text} собирается...")
+async def p_v(m: Message, state: FSMContext):
+    await log_to_db("history.db", (m.from_user.id, "VK", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    report, photo = await generate_vk_report(m.text)
+    if photo: await m.answer_photo(photo, caption=report, parse_mode="HTML")
+    else: await m.answer(report, parse_mode="HTML")
     await state.clear()
+
+@dp.message(F.text == "🌐 IP Address")
+async def s_i(m: Message, state: FSMContext):
+    await m.answer("🌐 <b>Введите IP адрес:</b>", parse_mode="HTML")
+    await state.set_state(States.ip)
+
+@dp.message(States.ip)
+async def p_i(m: Message, state: FSMContext):
+    await log_to_db("history.db", (m.from_user.id, "IP", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer(await generate_ip_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+    await state.clear()
+
+@dp.message(F.text == "💎 TON Wallet")
+async def s_t(m: Message, state: FSMContext):
+    await m.answer("💎 <b>Введите TON адрес:</b>", parse_mode="HTML")
+    await state.set_state(States.ton)
+
+@dp.message(States.ton)
+async def p_t(m: Message, state: FSMContext):
+    await log_to_db("history.db", (m.from_user.id, "TON", m.text, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer(await generate_ton_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
+    await state.clear()
+
+@dp.message(F.text == "📥 Оплаты")
+async def d_p(m: Message):
+    if m.from_user.id == ADMIN_ID: await m.answer_document(FSInputFile("plat.db"))
+
+@dp.message(F.text == "📥 Логи")
+async def d_l(m: Message):
+    if m.from_user.id == ADMIN_ID: await m.answer_document(FSInputFile("history.db"))
 
 @dp.message(F.text == "👤 Профиль")
 async def prof(m: Message):
-    await m.answer(f"👤 <b>ВАШ ПРОФИЛЬ:</b>\n├ ID: <code>{m.from_user.id}</code>\n└ Username: @{m.from_user.username}", parse_mode="HTML")
+    await m.answer(f"👤 <b>ID:</b> <code>{m.from_user.id}</code>\n<b>Status:</b> {'Admin' if m.from_user.id == ADMIN_ID else 'User'}", parse_mode="HTML")
 
 # --- СЕРВЕР И АНТИ-СОН ---
-async def handle(r): return web.Response(text="OSINT MAX IS ACTIVE")
+async def handle(r): return web.Response(text="SHERLOCK ACTIVE")
 async def self_ping():
     url = os.environ.get("RENDER_EXTERNAL_URL")
     while url:
-        try:
-            async with session.get(url) as r: pass
+        try: async with session.get(url) as r: pass
         except: pass
         await asyncio.sleep(300)
 
@@ -211,16 +193,13 @@ async def main():
     async with aiosqlite.connect("plat.db") as db:
         await db.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY, user_id INTEGER, username TEXT, fio TEXT, date TEXT)")
         await db.commit()
-    
     global session
     session = aiohttp.ClientSession()
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.environ.get("PORT", 8080))
-    await asyncio.gather(web.TCPSite(runner, '0.0.0.0', port).start(), dp.start_polling(bot), self_ping())
+    await asyncio.gather(web.TCPSite(runner, '0.0.0.0', int(os.environ.get("PORT", 8080))).start(), dp.start_polling(bot), self_ping())
 
 if __name__ == "__main__":
     asyncio.run(main())
