@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# --- CONFIGURATION ---
+# --- КОНФИГУРАЦИЯ ---
 TOKEN = '8782789238:AAENc2VrGUNUKQnUbI2SKt79dpJfJKF6UZo'
 VK_TOKEN = 'vk1.a.gg0A2uqhaeJR4Q0rQroAOrKxLtlld-zpDhUuNRsLph2tyJZzoyIioGN8vNs_AzCfepKFqTdigONU-ydz1VZnL68Ns7qZ0HcgUhmEOE_F1ZI26awIwunbGfzTpn-xmEEXAueaaBR5lb-ew_z478YoxYuNlAEHHfGBddR9u10-MJae6l1UUC4C3eKWD28ugFy7hhguP-Ihcxsb42Fbq_SPsw'
 ADMIN_IDS = [7572936594, 911874462]
@@ -30,82 +30,112 @@ class States(StatesGroup):
     ip = State()
     ton = State()
 
-# --- DATABASE ---
+# --- БАЗА ДАННЫХ ---
 async def log_to_db(db_name, data):
     async with aiosqlite.connect(db_name) as db:
         q = "INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)" if db_name == "history.db" else "INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)"
         await db.execute(q, data)
         await db.commit()
 
-# --- KEYBOARDS ---
+# --- КЛАВИАТУРА ---
 def main_kb(user_id):
     btns = [
-        [KeyboardButton(text="ð¤ Ð¤ÐÐ (DEEP SCAN â­ï¸)")],
-        [KeyboardButton(text="ð¤ ÐÐ ÐÑÐ¾ÑÐ¸Ð»Ñ"), KeyboardButton(text="ð HLR / ÐÐ¾Ð¼ÐµÑ")],
-        [KeyboardButton(text="ð IP Address"), KeyboardButton(text="ð TON Wallet")],
-        [KeyboardButton(text="ð¤ ÐÑÐ¾ÑÐ¸Ð»Ñ")]
+        [KeyboardButton(text="👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")],
+        [KeyboardButton(text="👤 ВК Профиль"), KeyboardButton(text="📞 HLR / Номер")],
+        [KeyboardButton(text="🌐 IP Адрес"), KeyboardButton(text="💎 TON Кошелек")],
+        [KeyboardButton(text="👤 Мой Профиль")]
     ]
     if user_id in ADMIN_IDS:
-        btns.append([KeyboardButton(text="ð¥ ÐÐ¿Ð»Ð°ÑÑ"), KeyboardButton(text="ð¥ ÐÐ¾Ð³Ð¸")])
+        btns.append([KeyboardButton(text="📥 База Оплат"), KeyboardButton(text="📥 Логи Поиска")])
     return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
 
-# --- SEARCH MODULES ---
+# --- МОДУЛИ ПОИСКА ---
 async def get_fio_report(fio):
     enc = urllib.parse.quote(fio)
     vk_url = f"https://api.vk.com/method/users.search?q={enc}&count=1&fields=bdate,city,domain&access_token={VK_TOKEN}&v=5.131"
     async with session.get(vk_url) as r:
         v = await r.json()
         u = v['response']['items'][0] if 'response' in v and v['response']['items'] else {}
-        return (f"<b>[ ð ÐÐÐ¡Ð¬Ð: {fio.upper()} ]</b>\n"
-                f"â ÐÐ: <code>{u.get('bdate','-')}</code>, {u.get('city',{}).get('title','-')}\n"
-                f"â ÐÑÐ¾ÑÐ¸Ð»Ñ: vk.com/{u.get('domain','id')}\n"
-                f"â <a href='https://fssp.gov.ru/iss/ip?is%5Blast_name%5D={fio.split()[0]}'>Ð¤Ð¡Ð¡Ð (ÐÐ¾Ð»Ð³Ð¸)</a>")
+        return (f"<b>[ 📂 СФОРМИРОВАНО ДОСЬЕ: {fio.upper()} ]</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>ДАННЫЕ ВК:</b>\n"
+                f"├ Дата рожд.: <code>{u.get('bdate','скрыто')}</code>\n"
+                f"├ Город: <code>{u.get('city',{}).get('title','не указан')}</code>\n"
+                f"└ Ссылка: vk.com/{u.get('domain','id')}\n\n"
+                f"🏛 <b>РЕЕСТРЫ:</b>\n"
+                f"└ <a href='https://fssp.gov.ru/iss/ip?is%5Blast_name%5D={fio.split()[0]}'>Проверить долги (ФССП)</a>\n"
+                f"━━━━━━━━━━━━━━━━━━━━")
 
-# --- HANDLERS ---
+# --- ОБРАБОТЧИКИ (HANDLERS) ---
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
-    await m.answer("<b>бета тест готов к твоему использованию</b>", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
+    await m.answer("<b>СИСТЕМА OSINT ЗАПУЩЕНА</b>\nВыберите нужный модуль в меню ниже.\n\nАвтор: @owhig 👤", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
 
-@dp.message(F.text == "ð¤ Ð¤ÐÐ (DEEP SCAN â­ï¸)")
+@dp.message(F.text == "👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")
 async def s_f(m: Message, state: FSMContext):
-    await m.answer("ÐÐ²ÐµÐ´Ð¸ÑÐµ Ð¤ÐÐ:")
+    await m.answer("📝 <b>Введите ФИО цели для поиска:</b>", parse_mode="HTML")
     await state.set_state(States.fio)
 
 @dp.message(States.fio)
 async def p_f(m: Message, state: FSMContext):
     fio = m.text
     if m.from_user.id in ADMIN_IDS:
-        await m.answer(await get_fio_report(fio), parse_mode="HTML")
+        await m.answer("🔓 <b>ДОСТУП АДМИНА:</b> Генерирую отчет бесплатно...")
+        await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
     else:
         pending_searches[m.from_user.id] = fio
-        await m.answer_invoice(title="SEARCH", description=fio, prices=[LabeledPrice(label="XTR", amount=15)], payload="pay", currency="XTR")
+        await m.answer_invoice(
+            title="ПОИСК ПО ФИО",
+            description=f"Генерация полного отчета по: {fio}",
+            prices=[LabeledPrice(label="Звезды Telegram", amount=15)],
+            payload="pay_fio",
+            currency="XTR"
+        )
     await state.clear()
 
 @dp.pre_checkout_query()
-async def pre_c(q: PreCheckoutQuery): await q.answer(ok=True)
+async def pre_c(q: PreCheckoutQuery):
+    await q.answer(ok=True)
 
 @dp.message(F.successful_payment)
 async def pay_ok(m: Message):
-    fio = pending_searches.get(m.from_user.id, "Error")
-    await m.answer(await get_fio_report(fio), parse_mode="HTML")
+    fio = pending_searches.get(m.from_user.id, "Ошибка")
+    await log_to_db("plat.db", (m.from_user.id, m.from_user.username, fio, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer("✅ <b>Оплата прошла!</b> Формирую досье...")
+    await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
 
-@dp.message(F.text == "ð¥ ÐÐ¿Ð»Ð°ÑÑ")
+@dp.message(F.text == "📞 HLR / Номер")
+async def s_p(m: Message, state: FSMContext):
+    await m.answer("📞 <b>Введите номер телефона (+7...):</b>", parse_mode="HTML")
+    await state.set_state(States.phone)
+
+@dp.message(States.phone)
+async def p_p(m: Message, state: FSMContext):
+    clean = "".join(filter(str.isdigit, m.text))
+    await log_to_db("history.db", (m.from_user.id, "PHONE", clean, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    report = (f"<b>[ 📱 НОМЕР: +{clean} ]</b>\n"
+              f"├ <a href='https://numbuster.com/ru/phone/{clean}'>Теги (NumBuster)</a>\n"
+              f"└ <a href='https://mnp.ros-reestr.ru/search?phone={clean}'>Проверка MNP (Оператор)</a>")
+    await m.answer(report, parse_mode="HTML", disable_web_page_preview=True)
+    await state.clear()
+
+@dp.message(F.text == "📥 База Оплат")
 async def d_p(m: Message):
     if m.from_user.id in ADMIN_IDS and os.path.exists("plat.db"):
-        await m.answer_document(FSInputFile("plat.db"))
+        await m.answer_document(FSInputFile("plat.db"), caption="📁 База успешных оплат")
 
-@dp.message(F.text == "ð¥ ÐÐ¾Ð³Ð¸")
+@dp.message(F.text == "📥 Логи Поиска")
 async def d_l(m: Message):
     if m.from_user.id in ADMIN_IDS and os.path.exists("history.db"):
-        await m.answer_document(FSInputFile("history.db"))
+        await m.answer_document(FSInputFile("history.db"), caption="📁 Логи всех запросов")
 
-@dp.message(F.text == "ð¤ ÐÑÐ¾ÑÐ¸Ð»Ñ")
+@dp.message(F.text == "👤 Мой Профиль")
 async def prof(m: Message):
-    status = "Admin" if m.from_user.id in ADMIN_IDS else "User"
-    await m.answer(f"ID: {m.from_user.id}\nStatus: {status}")
+    status = "👑 Администратор" if m.from_user.id in ADMIN_IDS else "👤 Пользователь"
+    await m.answer(f"👤 <b>Ваш Профиль:</b>\n\n🆔 ID: <code>{m.from_user.id}</code>\n📊 Статус: {status}", parse_mode="HTML")
 
-# --- WEB SERVER ---
-async def handle(r): return web.Response(text="OK")
+# --- СЕРВЕР И ПИНГ ---
+async def handle(r): return web.Response(text="БОТ АКТИВЕН")
 async def self_ping():
     url = os.environ.get("RENDER_EXTERNAL_URL")
     while True:
