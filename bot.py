@@ -2,12 +2,11 @@ import asyncio
 import aiosqlite
 import os
 import aiohttp
-import phonenumbers
 import urllib.parse
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, LabeledPrice, PreCheckoutQuery, ContentType, FSInputFile
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -21,7 +20,6 @@ ADMIN_IDS = [7572936594, 911874462]
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 session = None 
-pending_searches = {}
 
 class States(StatesGroup):
     fio = State()
@@ -32,25 +30,22 @@ class States(StatesGroup):
 # --- БАЗА ДАННЫХ ---
 async def log_to_db(db_name, data):
     async with aiosqlite.connect(db_name) as db:
-        if db_name == "history.db":
-            q = "INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)"
-        else:
-            q = "INSERT INTO payments (user_id, username, fio, date) VALUES (?, ?, ?, ?)"
+        q = "INSERT INTO search_logs (user_id, type, query, date) VALUES (?, ?, ?, ?)"
         await db.execute(q, data)
         await db.commit()
 
 # --- КЛАВИАТУРА ---
 def main_kb(user_id):
     btns = [
-        [KeyboardButton(text="👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")],
+        [KeyboardButton(text="👤 ФИО (ГЛУБОКИЙ ПОИСК)")],
         [KeyboardButton(text="👤 ВК Профиль"), KeyboardButton(text="📞 Пробив Номера")],
         [KeyboardButton(text="🌐 IP Адрес"), KeyboardButton(text="👤 Мой Профиль")]
     ]
     if user_id in ADMIN_IDS:
-        btns.append([KeyboardButton(text="📥 База Оплат"), KeyboardButton(text="📥 Логи Поиска")])
+        btns.append([KeyboardButton(text="📥 База Данных"), KeyboardButton(text="📥 Логи Поиска")])
     return ReplyKeyboardMarkup(keyboard=btns, resize_keyboard=True)
 
-# --- МОДУЛИ ---
+# --- МОДУЛИ ПОИСКА ---
 async def generate_ip_report(ip):
     async with session.get(f"http://ip-api.com/json/{ip}?fields=66846719") as r:
         d = await r.json()
@@ -63,7 +58,7 @@ async def generate_ip_report(ip):
                 f"└ Карта: <a href='https://www.google.com/maps?q={d.get('lat')},{d.get('lon')}'>ОТКРЫТЬ КАРТУ</a>")
 
 async def generate_vk_report(target):
-    fields = "photo_max,city,bdate,status,online,followers_count,career,education,relation,domain"
+    fields = "photo_max,city,bdate,status,online,relation,domain"
     url = f"https://api.vk.com/method/users.get?user_ids={target}&fields={fields}&access_token={VK_TOKEN}&v=5.131"
     async with session.get(url) as r:
         data = await r.json()
@@ -75,7 +70,6 @@ async def generate_vk_report(target):
                 f"├ Город: {u.get('city', {}).get('title', 'Не указан')}\n"
                 f"├ ДР: <code>{u.get('bdate', 'Скрыто')}</code>\n"
                 f"├ Сем. положение: {rel_map.get(u.get('relation', 0), 'Скрыто')}\n"
-                f"├ Статус: <i>{u.get('status', '')}</i>\n"
                 f"├ Активность: {'🟢 В сети' if u.get('online') else '🔴 Оффлайн'}\n"
                 f"└ Ссылка: vk.com/{u.get('domain', 'id'+str(u.get('id')))}")
 
@@ -93,9 +87,9 @@ async def get_fio_report(fio):
 # --- ОБРАБОТЧИКИ ---
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
-    await m.answer("<b>СИСТЕМА OSINT ЗАПУЩЕНА</b>", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
+    await m.answer("<b>СИСТЕМА OSINT ГОТОВА (FREE)</b>", reply_markup=main_kb(m.from_user.id), parse_mode="HTML")
 
-@dp.message(F.text == "👤 ФИО (ГЛУБОКИЙ ПОИСК ⭐️)")
+@dp.message(F.text == "👤 ФИО (ГЛУБОКИЙ ПОИСК)")
 async def s_f(m: Message, state: FSMContext):
     await m.answer("📝 Введите ФИО цели:")
     await state.set_state(States.fio)
@@ -103,21 +97,11 @@ async def s_f(m: Message, state: FSMContext):
 @dp.message(States.fio)
 async def p_f(m: Message, state: FSMContext):
     fio = m.text
-    if m.from_user.id in ADMIN_IDS:
-        await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
-    else:
-        pending_searches[m.from_user.id] = fio
-        await m.answer_invoice(title="ПОИСК ПО ФИО", description=fio, prices=[LabeledPrice(label="Звезды", amount=15)], payload="pay", currency="XTR")
+    await log_to_db("history.db", (m.from_user.id, "FIO", fio, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    await m.answer("🔎 Сканирование баз данных...")
+    report = await get_fio_report(fio)
+    await m.answer(report, parse_mode="HTML", disable_web_page_preview=True)
     await state.clear()
-
-@dp.pre_checkout_query()
-async def pre_c(q: PreCheckoutQuery): await q.answer(ok=True)
-
-@dp.message(F.successful_payment)
-async def pay_ok(m: Message):
-    fio = pending_searches.get(m.from_user.id, "Ошибка")
-    await log_to_db("plat.db", (m.from_user.id, m.from_user.username, fio, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    await m.answer(await get_fio_report(fio), parse_mode="HTML", disable_web_page_preview=True)
 
 @dp.message(F.text == "📞 Пробив Номера")
 async def s_p(m: Message, state: FSMContext):
@@ -156,10 +140,10 @@ async def p_vk(m: Message, state: FSMContext):
     await m.answer(await generate_vk_report(m.text), parse_mode="HTML", disable_web_page_preview=True)
     await state.clear()
 
-@dp.message(F.text == "📥 База Оплат")
+@dp.message(F.text == "📥 База Данных")
 async def d_p(m: Message):
-    if m.from_user.id in ADMIN_IDS and os.path.exists("plat.db"):
-        await m.answer_document(FSInputFile("plat.db"))
+    if m.from_user.id in ADMIN_IDS and os.path.exists("history.db"):
+        await m.answer_document(FSInputFile("history.db"))
 
 @dp.message(F.text == "📥 Логи Поиска")
 async def d_l(m: Message):
@@ -171,7 +155,7 @@ async def prof(m: Message):
     status = "👑 Админ" if m.from_user.id in ADMIN_IDS else "👤 Юзер"
     await m.answer(f"🆔 ID: <code>{m.from_user.id}</code>\n📊 Статус: {status}", parse_mode="HTML")
 
-# --- СЕРВЕР И ПИНГ ---
+# --- СЕРВЕР ---
 async def handle(r): return web.Response(text="ACTIVE")
 async def self_ping():
     url = os.environ.get("RENDER_EXTERNAL_URL")
@@ -185,8 +169,6 @@ async def self_ping():
 async def main():
     async with aiosqlite.connect("history.db") as db:
         await db.execute("CREATE TABLE IF NOT EXISTS search_logs (id INTEGER PRIMARY KEY, user_id INTEGER, type TEXT, query TEXT, date TEXT)")
-    async with aiosqlite.connect("plat.db") as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY, user_id INTEGER, username TEXT, fio TEXT, date TEXT)")
     
     global session
     session = aiohttp.ClientSession()
